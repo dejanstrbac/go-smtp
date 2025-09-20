@@ -71,12 +71,12 @@ func (s *XCLIENTSession) XCLIENT(session smtp.Session, attrs map[string]string) 
 
 func ExampleServer_xclient() {
 	be := &XCLIENTBackend{}
-	
+
 	s := smtp.NewServer(be)
 	s.Addr = ":2525"
 	s.Domain = "localhost"
 	s.EnableXCLIENT = true
-	
+
 	// Add trusted networks for XCLIENT
 	err := s.AddXCLIENTTrustedNetwork("127.0.0.0/8")
 	if err != nil {
