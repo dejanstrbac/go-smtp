@@ -79,6 +79,11 @@ type Server struct {
 	// Default value of NONE to advertise no specific profile.
 	MtPriorityProfile PriorityProfile
 
+	// Allow custom RCPT TO parameters (extensions like XRCPTFORWARD).
+	// When disabled, unknown RCPT parameters will return error 500 like before.
+	// Should only be used if backend supports custom extensions.
+	EnableRCPTExtensions bool
+
 	// The server backend.
 	Backend Backend
 
