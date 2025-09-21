@@ -786,8 +786,25 @@ func (c *Conn) handleRcpt(arg string) {
 			}
 			opts.MTPriority = &mtPriority
 		default:
-			c.writeResponse(500, EnhancedCode{5, 5, 4}, "Unknown RCPT TO argument")
-			return
+			// Handle custom extensions (non-standard parameters)
+			if !c.server.EnableRCPTExtensions {
+				c.writeResponse(500, EnhancedCode{5, 5, 4}, "Unknown RCPT parameter")
+				return
+			}
+
+			if opts.Extensions == nil {
+				opts.Extensions = make(map[string]string)
+			}
+
+			// Special validation for XRCPTFORWARD
+			if key == "XRCPTFORWARD" {
+				if err := c.validateXRCPTFORWARD(value); err != nil {
+					c.writeResponse(501, EnhancedCode{5, 5, 4}, fmt.Sprintf("Malformed XRCPTFORWARD parameter: %v", err))
+					return
+				}
+			}
+
+			opts.Extensions[key] = value
 		}
 	}
 
@@ -1336,6 +1353,118 @@ func (c *Conn) readLine() (string, error) {
 	}
 
 	return c.text.ReadLine()
+}
+
+// validateXRCPTFORWARD validates an XRCPTFORWARD parameter value according to Dovecot specification
+func (c *Conn) validateXRCPTFORWARD(value string) error {
+	// XRCPTFORWARD must be base64 encoded but can encode empty content
+	if value == "" {
+		return errors.New("XRCPTFORWARD value cannot be empty")
+	}
+
+	// Check if it's valid base64
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("invalid base64 encoding: %v", err)
+	}
+
+	// Check size limit (~900 bytes per Dovecot spec)
+	if len(decoded) > 900 {
+		return fmt.Errorf("XRCPTFORWARD data too large: %d bytes (max 900)", len(decoded))
+	}
+
+	// Validate that it contains tab-separated key=value pairs (empty content is allowed)
+	decodedStr := string(decoded)
+	if err := c.validateXRCPTFORWARDContent(decodedStr); err != nil {
+		return fmt.Errorf("invalid content: %v", err)
+	}
+
+	return nil
+}
+
+// validateXRCPTFORWARDContent validates the decoded XRCPTFORWARD content
+func (c *Conn) validateXRCPTFORWARDContent(content string) error {
+	// Allow empty content
+	if content == "" {
+		return nil
+	}
+
+	// Content should be tab-separated key=value pairs
+	// Split by literal tabs first, then unescape individual pairs
+	pairs := strings.Split(content, "\t")
+
+	for _, pair := range pairs {
+		if pair == "" {
+			continue // Allow empty pairs
+		}
+
+		// Each pair should be key=value
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid key=value pair format: %s", pair)
+		}
+
+		// Key cannot be empty
+		if parts[0] == "" {
+			return errors.New("empty key in key=value pair")
+		}
+	}
+
+	return nil
+}
+
+// unescapeXRCPTFORWARD handles Dovecot's escape sequences (\t, \n, \r, \\)
+func unescapeXRCPTFORWARD(escaped string) string {
+	// Order matters: handle \\ first to avoid double-processing
+	result := strings.ReplaceAll(escaped, "\\\\", "\x00") // temporary placeholder
+	result = strings.ReplaceAll(result, "\\t", "\t")
+	result = strings.ReplaceAll(result, "\\n", "\n")
+	result = strings.ReplaceAll(result, "\\r", "\r")
+	result = strings.ReplaceAll(result, "\x00", "\\") // restore backslashes
+	return result
+}
+
+// ParseXRCPTFORWARD parses XRCPTFORWARD data into key=value pairs
+// This is a utility function that backends can use to parse the forwarded data
+func ParseXRCPTFORWARD(value string) (map[string]string, error) {
+	if value == "" {
+		return nil, errors.New("XRCPTFORWARD value cannot be empty")
+	}
+
+	// Decode base64
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64 encoding: %v", err)
+	}
+
+	content := string(decoded)
+
+	// Split by literal tabs first (before unescaping)
+	pairs := strings.Split(content, "\t")
+	result := make(map[string]string)
+
+	for _, pair := range pairs {
+		if pair == "" {
+			continue
+		}
+
+		// Split into key=value
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid key=value pair format: %s", pair)
+		}
+		if parts[0] == "" {
+			return nil, errors.New("empty key in key=value pair")
+		}
+
+		key := parts[0]
+		value := parts[1]
+
+		// Unescape the value (not the key)
+		result[key] = unescapeXRCPTFORWARD(value)
+	}
+
+	return result, nil
 }
 
 func (c *Conn) handleXCLIENT(arg string) {
