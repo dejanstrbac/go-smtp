@@ -40,7 +40,7 @@ func sendDeliveryCmdsLMTP(t *testing.T, scanner *bufio.Scanner, c io.Writer) {
 func sendLHLO(t *testing.T, scanner *bufio.Scanner, c io.Writer) {
 	io.WriteString(c, "LHLO localhost\r\n")
 	scanner.Scan()
-	if scanner.Text() != "250-Hello localhost" {
+	if scanner.Text() != "250-localhost Hello localhost" {
 		t.Fatal("Invalid LHLO response:", scanner.Text())
 	}
 	for scanner.Scan() {
