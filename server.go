@@ -68,6 +68,20 @@ type Server struct {
 	// timer race each other and can send the client a duplicate notice.
 	OnTimeout func()
 
+	// Advertise the obsolete "AUTH=<mechanisms>" EHLO line in addition to the
+	// standard "AUTH <mechanisms>" capability. Several Microsoft client
+	// lineages (Outlook and its cloud sync fleet) look for the legacy "AUTH="
+	// form and refuse to attempt authentication when it is absent; Postfix
+	// ships the identical workaround as broken_sasl_auth_clients. Conforming
+	// clients ignore unknown EHLO keywords, so enabling this is harmless for
+	// everyone else.
+	EnableLegacyAuthCap bool
+
+	// Suppress the "LIMITS RCPTMAX=..." (RFC 9422) capability that is
+	// otherwise advertised when MaxRecipients > 0. The extension is recent
+	// and rarely deployed; some client capability parsers mishandle it.
+	DisableLimitsCap bool
+
 	// Advertise SMTPUTF8 (RFC 6531) capability.
 	// Should be used only if backend supports it.
 	EnableSMTPUTF8 bool

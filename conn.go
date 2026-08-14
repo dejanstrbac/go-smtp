@@ -393,7 +393,9 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 	c.setSession(sess)
 
 	if !enhanced {
-		c.writeResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("Hello %s", domain))
+		// RFC 5321 §4.1.1.1: the first element of a HELO reply is the
+		// server's domain, not free text.
+		c.writeResponse(250, EnhancedCode{2, 0, 0}, c.helloReplyLine(domain))
 		return
 	}
 
@@ -416,6 +418,11 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 
 		if len(mechs) > 0 {
 			caps = append(caps, authCap)
+			if c.server.EnableLegacyAuthCap {
+				// Obsolete "AUTH=" form for Microsoft clients; see
+				// Server.EnableLegacyAuthCap.
+				caps = append(caps, "AUTH="+strings.Join(mechs, " "))
+			}
 		}
 	}
 	if c.server.EnableSMTPUTF8 {
@@ -435,7 +442,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 	} else {
 		caps = append(caps, "SIZE")
 	}
-	if c.server.MaxRecipients > 0 {
+	if c.server.MaxRecipients > 0 && !c.server.DisableLimitsCap {
 		caps = append(caps, fmt.Sprintf("LIMITS RCPTMAX=%v", c.server.MaxRecipients))
 	}
 	if c.server.EnableRRVS {
@@ -459,9 +466,22 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		caps = append(caps, "XCLIENT ADDR PORT PROTO HELO LOGIN NAME")
 	}
 
-	args := []string{"Hello " + domain}
+	// RFC 5321 §4.1.1.1: the first line of an EHLO reply carries the
+	// server's domain; the client greeting is trailing text.
+	args := []string{c.helloReplyLine(domain)}
 	args = append(args, caps...)
 	c.writeResponse(250, NoEnhancedCode, args...)
+}
+
+// helloReplyLine builds the first line of a HELO/EHLO reply. Per RFC 5321
+// §4.1.1.1 it must start with the server's domain; the greeting for the
+// client is appended as free text. When Server.Domain is unset, fall back to
+// the historical "Hello <client>" form.
+func (c *Conn) helloReplyLine(clientDomain string) string {
+	if c.server.Domain != "" {
+		return fmt.Sprintf("%s Hello %s", c.server.Domain, clientDomain)
+	}
+	return fmt.Sprintf("Hello %s", clientDomain)
 }
 
 // READY state -> waiting for MAIL
