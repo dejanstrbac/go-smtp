@@ -54,6 +54,9 @@ func parseCmd(line string) (cmd string, arg string, err error) {
 func parseArgs(s string) (map[string]string, error) {
 	argMap := map[string]string{}
 	for _, arg := range strings.Fields(s) {
+		// Split on the first '=' only: parameter values may themselves
+		// contain '=' (e.g. AUTH=dXNlcg== with base64 padding, RFC 4954,
+		// or an ORCPT address).
 		key, value, found := strings.Cut(arg, "=")
 		if found {
 			argMap[strings.ToUpper(key)] = value
