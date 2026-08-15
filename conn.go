@@ -51,6 +51,14 @@ type Conn struct {
 	locker     sync.Mutex
 	binarymime bool
 
+	// Serializes the backend's Session.Reset and Session.Logout callbacks
+	// against each other; see resetSession and logoutSession. Deliberately
+	// separate from locker: backends may call locked Conn accessors from
+	// inside those callbacks, so locker must never be held across one, yet
+	// they still must not run concurrently — Server.Close calls Logout from
+	// its own goroutine while the serve goroutine may be in Reset.
+	sessionCallbacks sync.Mutex
+
 	// Connection-scoped context, derived from Server.BaseContext (or
 	// context.Background) and cancelled when connection handling ends or the
 	// server is closed / shut down. Guarded by locker.
@@ -243,6 +251,22 @@ func (c *Conn) Session() Session {
 	return c.session
 }
 
+// resetSession calls the backend's Session.Reset with no Conn lock held, so
+// the callback is free to use any Conn accessor, and serialized against
+// logoutSession so a session never sees Reset and Logout at once.
+func (c *Conn) resetSession(session Session) {
+	c.sessionCallbacks.Lock()
+	defer c.sessionCallbacks.Unlock()
+	session.Reset()
+}
+
+// logoutSession is resetSession's counterpart for Session.Logout.
+func (c *Conn) logoutSession(session Session) error {
+	c.sessionCallbacks.Lock()
+	defer c.sessionCallbacks.Unlock()
+	return session.Logout()
+}
+
 func (c *Conn) setSession(session Session) {
 	c.locker.Lock()
 	defer c.locker.Unlock()
@@ -268,7 +292,7 @@ func (c *Conn) Close() error {
 	c.locker.Unlock()
 
 	if session != nil {
-		session.Logout()
+		c.logoutSession(session)
 	}
 
 	return conn.Close()
@@ -375,7 +399,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		// and reset the state exactly as if a RSET command has been issued."
 
 		// Free session resources before resetting
-		if err := session.Logout(); err != nil {
+		if err := c.logoutSession(session); err != nil {
 			c.server.ErrorLog.Printf("Failed to logout session on re-EHLO: %v", err)
 		}
 		c.setSession(nil)
@@ -1205,7 +1229,7 @@ func (c *Conn) handleStartTLS() {
 	// be able to see the information about TLS connection in the
 	// ConnectionState object passed to it.
 	if session := c.Session(); session != nil {
-		session.Logout()
+		c.logoutSession(session)
 		c.setSession(nil)
 	}
 	c.helo = ""
@@ -1822,7 +1846,7 @@ func (c *Conn) handleXCLIENT(arg string) {
 	// Per XCLIENT spec, we must reset the session state and issue a new
 	// greeting. This is similar to what we do for STARTTLS.
 	if session := c.Session(); session != nil {
-		session.Logout()
+		c.logoutSession(session)
 		c.setSession(nil)
 	}
 	c.helo = ""
@@ -1975,6 +1999,6 @@ func (c *Conn) reset() {
 	c.locker.Unlock()
 
 	if session != nil {
-		session.Reset()
+		c.resetSession(session)
 	}
 }
