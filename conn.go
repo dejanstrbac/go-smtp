@@ -1948,9 +1948,14 @@ func (c *Conn) XCLIENTData() map[string]string {
 }
 
 func (c *Conn) reset() {
+	// Clear connection state under the lock, but call Session.Reset outside of
+	// it, exactly as Conn.Close does for Logout: backends may call locked Conn
+	// accessors (Conn, Session, TLSConnectionState, ...) from within Reset, and
+	// c.locker is not reentrant, so holding it across the callback deadlocks
+	// the connection goroutine for the rest of the connection's life. That hangs
+	// every RSET and every message completion (handleData resets on return), and
+	// the goroutine, socket and session are never released.
 	c.locker.Lock()
-	defer c.locker.Unlock()
-
 	if c.bdatPipe != nil {
 		c.bdatPipe.CloseWithError(ErrDataReset)
 		c.bdatPipe = nil
@@ -1963,12 +1968,13 @@ func (c *Conn) reset() {
 	}
 	c.bdatStatus = nil
 	c.bytesReceived = 0
-
-	if c.session != nil {
-		c.session.Reset()
-	}
-
 	c.fromReceived = false
 	c.recipients = nil
 	c.binarymime = false
+	session := c.session
+	c.locker.Unlock()
+
+	if session != nil {
+		session.Reset()
+	}
 }
